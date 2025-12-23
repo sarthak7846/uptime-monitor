@@ -10,11 +10,38 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
+}
+
+enum HttpMethod {
+  GET
+  POST
+  HEAD
+}
+
+enum MonitorState {
+  PENDING
+  UP
+  DOWN
 }
 
 model User {
-  id Int @id @unique
-  email String @unique
+  id       String @id @default(uuid())
+  email    String @unique
+  password String
+  name     String
+  monitors Monitor[]
+}
+
+model Monitor {
+  id   String  @id @default(uuid())
   name String?
+  url  String
+  method HttpMethod @default(GET)
+  lastStatus MonitorState @default(PENDING)
+  createdAt DateTime @default(now())
+
+  //RELATIONS
+  userId String
+  user User @relation(fields: [userId], references: [id])
 }

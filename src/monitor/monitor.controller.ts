@@ -1,4 +1,47 @@
-import { Controller } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { MonitorService } from './monitor.service';
+import { CreateMonitorDto } from './create-monitor.dto';
+import { UpdateMonitorDto } from './update-monitor.dto';
+import type { AuthenticatedRequest } from 'src/types/express';
 
 @Controller('monitor')
-export class MonitorController {}
+export class MonitorController {
+    constructor(private readonly monitorService: MonitorService) { }
+
+    @Get('/all')
+    async getAllMonitors() {
+        const res = await this.monitorService.getAllMonitors();
+        return res;
+    }
+
+    @Post()
+    async createMonitor(@Body() createMonitorDto: CreateMonitorDto, @Req() request: AuthenticatedRequest) {
+        const userId = request.user.sub;
+        const res = await this.monitorService.createMonitor(createMonitorDto, userId);
+        return res;
+    }
+
+    @Patch(':id')
+    async updateMonitor(@Param('id') id: string, @Body() updateMonitorDto: UpdateMonitorDto) {
+        const res = await this.monitorService.updateMonitor(id, updateMonitorDto);
+        return res;
+    }
+
+    @Delete(':id')
+    async deleteMonitor(@Param('id') id: string) {
+        const res = await this.monitorService.deleteMonitor(id);
+        return res;
+    }
+
+    @Get(':id')
+    async getMonitor(@Param('id') id: string) {
+        const res = await this.monitorService.getMonitor(id);
+        return res;
+    }
+
+    @Get('/user/:userId')
+    async getAllMonitorsOfUser(@Param('userId') userId: string) {
+        const res = await this.monitorService.getAllMonitorsOfUser(userId);
+        return res;
+    }
+}
