@@ -26,22 +26,35 @@ enum MonitorState {
 }
 
 model User {
-  id       String @id @default(uuid())
-  email    String @unique
+  id       String    @id @default(uuid())
+  email    String    @unique
   password String
   name     String
   monitors Monitor[]
 }
 
 model Monitor {
-  id   String  @id @default(uuid())
-  name String?
-  url  String
-  method HttpMethod @default(GET)
+  id         String       @id @default(uuid())
+  name       String?
+  url        String
+  method     HttpMethod   @default(GET)
+  interval   Int
+  timeout    Int
   lastStatus MonitorState @default(PENDING)
-  createdAt DateTime @default(now())
+  createdAt  DateTime     @default(now())
 
   //RELATIONS
-  userId String
-  user User @relation(fields: [userId], references: [id])
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  monitorLogs MonitorLog[]
+}
+
+model MonitorLog {
+  id         String       @id @default(uuid())
+  monitorId  String
+  status     MonitorState
+  responseMs Int?
+  createdAt  DateTime     @default(now())
+
+  monitor Monitor @relation(fields: [monitorId], references: [id])
 }

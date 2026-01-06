@@ -23,13 +23,13 @@ export class MonitorService {
       'check-monitor',
       {
         monitorId: res.id,
-        url: res.url,
-        method: res.method,
       },
       {
         repeat: {
-          every: 60 * 1000,
+          every: createMonitorDto.interval,
         },
+        removeOnComplete: true,
+        removeOnFail: 100,
       },
     );
 
@@ -37,6 +37,40 @@ export class MonitorService {
   }
 
   async updateMonitor(id: string, updateMonitorDto: UpdateMonitorDto) {
+    const monitor = await this.prisma.monitor.findFirst({
+      where: { id },
+    });
+
+    if (monitor && monitor?.interval !== updateMonitorDto?.interval) {
+      // Reschedule job
+      const schedulers = await monitorQueue.getJobSchedulers();
+
+      console.log('existing jobs', JSON.stringify(schedulers, null, 2));
+
+      const scheduler = schedulers.find(
+        (s) => s.template?.data.monitorId === monitor.id,
+      );
+
+      if (scheduler) {
+        await monitorQueue.removeJobScheduler(scheduler.key);
+      }
+
+      // console.log('matching job', monitorJob);
+      await monitorQueue.add(
+        'check-monitor',
+        {
+          monitorId: monitor.id,
+        },
+        {
+          repeat: {
+            every: updateMonitorDto.interval,
+          },
+          removeOnComplete: true,
+          removeOnFail: 100,
+        },
+      );
+    }
+
     const res = await this.prisma.monitor.update({
       where: { id },
       data: updateMonitorDto,
@@ -46,6 +80,15 @@ export class MonitorService {
 
   async deleteMonitor(id: string) {
     const res = await this.prisma.monitor.delete({ where: { id } });
+
+    const schedulers = await monitorQueue.getJobSchedulers();
+
+    const scheduler = schedulers.find((s) => s.template?.data.monitorId === id);
+
+    if (scheduler) {
+      await monitorQueue.removeJobScheduler(scheduler.key);
+    }
+
     return res;
   }
 
