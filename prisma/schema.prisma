@@ -25,6 +25,11 @@ enum MonitorState {
   DOWN
 }
 
+enum IncidentState {
+  OPEN
+  RESOLVED
+}
+
 model User {
   id       String    @id @default(uuid())
   email    String    @unique
@@ -34,19 +39,22 @@ model User {
 }
 
 model Monitor {
-  id         String       @id @default(uuid())
-  name       String?
-  url        String
-  method     HttpMethod   @default(GET)
-  interval   Int
-  timeout    Int
-  lastStatus MonitorState @default(PENDING)
-  createdAt  DateTime     @default(now())
+  id                   String       @id @default(uuid())
+  name                 String?
+  url                  String
+  method               HttpMethod   @default(GET)
+  interval             Int
+  timeout              Int
+  lastStatus           MonitorState @default(PENDING)
+  consecutiveFailures  Int          @default(0)
+  consecutiveSuccesses Int          @default(0)
+  createdAt            DateTime     @default(now())
 
   //RELATIONS
   userId      String
   user        User         @relation(fields: [userId], references: [id])
   monitorLogs MonitorLog[]
+  incidents   Incident[]
 }
 
 model MonitorLog {
@@ -54,7 +62,20 @@ model MonitorLog {
   monitorId  String
   status     MonitorState
   responseMs Int?
+  statusCode Int?
+  reason     String?
   createdAt  DateTime     @default(now())
+
+  monitor Monitor @relation(fields: [monitorId], references: [id])
+}
+
+model Incident {
+  id            String        @id @default(uuid())
+  monitorId     String
+  startedAt     DateTime
+  endedAt       DateTime?
+  status        IncidentState
+  triggerReason String
 
   monitor Monitor @relation(fields: [monitorId], references: [id])
 }
