@@ -6,9 +6,10 @@ import { MonitorModule } from './monitor/monitor.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
-  imports: [ConfigModule.forRoot(), MonitorModule, PrismaModule, UserModule, AuthModule],
+  imports: [ConfigModule.forRoot(), MonitorModule, PrismaModule, UserModule, AuthModule, NotificationModule],
   controllers: [AppController],
   providers: [AppService],
 })

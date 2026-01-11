@@ -30,12 +30,30 @@ enum IncidentState {
   RESOLVED
 }
 
+enum NotificationChannel {
+  EMAIL
+  SLACK
+  WEBHOOK
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum NotificationEventType {
+  MONITOR_DOWN
+  MONITOR_UP
+}
+
 model User {
-  id       String    @id @default(uuid())
-  email    String    @unique
-  password String
-  name     String
-  monitors Monitor[]
+  id                    String                 @id @default(uuid())
+  email                 String                 @unique
+  password              String
+  name                  String
+  monitors              Monitor[]
+  notificationEndpoints NotificationEndpoint[]
 }
 
 model Monitor {
@@ -78,4 +96,58 @@ model Incident {
   triggerReason String
 
   monitor Monitor @relation(fields: [monitorId], references: [id])
+}
+
+model NotificationEndpoint {
+  id        String              @id @default(uuid())
+  userId    String
+  channel   NotificationChannel
+  config    Json
+  // verified Boolean @default(false)
+  createdAt DateTime            @default(now())
+  rules     NotificationRule[]
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model NotificationRule {
+  id         String   @id @default(uuid())
+  userId     String
+  monitorId  String? // null = all monitors
+  endpointId String
+  events     String[] // ['monitor.down', 'monitor.up']
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  endpoint NotificationEndpoint @relation(fields: [endpointId], references: [id])
+
+  @@index([userId])
+  @@index([monitorId])
+  @@index([endpointId])
+}
+
+model NotificationDelivery {
+  id String @id @default(uuid())
+
+  ruleId     String
+  endpointId String
+
+  channel NotificationChannel
+  status  NotificationDeliveryStatus @default(PENDING)
+
+  attempts Int     @default(0)
+  error    String?
+
+  createdAt DateTime  @default(now())
+  sentAt    DateTime?
+}
+
+model NotificationEventOutbox {
+  id          String    @id @default(uuid())
+  userId      String
+  type        String // monitor.down monitor.up
+  payload     Json
+  status      String    @default("PENDING") // PENDING | PROCESSED | FAILED
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
 }
