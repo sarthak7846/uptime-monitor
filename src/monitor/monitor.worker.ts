@@ -1,107 +1,143 @@
+import {
+  Injectable,
+  OnModuleInit,
+  OnModuleDestroy,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
 import { Worker } from 'bullmq';
 import axios from 'axios';
-import { Monitor, PrismaClient } from '@prisma/client';
-import { NotFoundException } from '@nestjs/common';
+import { Monitor } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { NotificationService } from 'src/notification/notification.service';
 import { ProbeResult } from './interfaces/probe-result.interface';
+import { NotificationEventType } from 'src/shared/events/notification-event.types';
 
-const prisma = new PrismaClient();
+@Injectable()
+export class MonitorWorker implements OnModuleInit, OnModuleDestroy {
+  private worker: Worker;
+  private readonly logger = new Logger(MonitorWorker.name, {
+    timestamp: true,
+  });
 
-const normalizeProbeResult = (
-  error: any,
-  response: any,
-  startTime: any,
-): ProbeResult => {
-  const responseMs = Date.now() - startTime;
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService,
+  ) {}
 
-  if (response) {
-    const status = response.status;
+  async onModuleInit() {
+    this.worker = new Worker(
+      'monitor-check',
+      async (job) => {
+        await this.processJob(job);
+      },
+      {
+        connection: { host: 'localhost', port: 6379 },
+      },
+    );
+    this.logger.log('Monitor worker started running');
+  }
 
-    if (status >= 200 && status < 400) {
+  async onModuleDestroy() {
+    await this.worker.close();
+  }
+
+  private normalizeProbeResult(
+    error: any,
+    response: any,
+    startTime: number,
+  ): ProbeResult {
+    const responseMs = Date.now() - startTime;
+
+    if (response) {
+      const status = response.status;
+
+      if (status >= 200 && status < 400) {
+        return {
+          isHealthy: true,
+          responseMs,
+          statusCode: status,
+        };
+      }
+
       return {
-        isHealthy: true,
+        isHealthy: false,
         responseMs,
         statusCode: status,
+        reason: `HTTP_${status}`,
+      };
+    }
+
+    if (error) {
+      return {
+        isHealthy: false,
+        reason: error.code || 'NETWORK_ERROR',
       };
     }
 
     return {
       isHealthy: false,
-      responseMs,
-      statusCode: status,
-      reason: `HTTP_${status}`,
+      reason: 'UNKNOWN_ERROR',
     };
   }
 
-  if (error) {
-    return {
-      isHealthy: false,
-      reason: error.code || 'NETWORK_ERROR',
-    };
+  private async runProbe(monitor: Partial<Monitor>): Promise<ProbeResult> {
+    const { timeout, url, method } = monitor;
+    const start = Date.now();
+
+    try {
+      const response = await axios({
+        url,
+        method,
+        timeout,
+        validateStatus: () => true, // Dont throw on 4xx/5xx
+      });
+
+      return this.normalizeProbeResult(null, response, start);
+    } catch (error) {
+      return this.normalizeProbeResult(error, null, start);
+    }
   }
 
-  return {
-    isHealthy: false,
-    reason: 'UNKNOWN_ERROR',
-  };
-};
+  private async startIncident(monitorId: string, reason?: string) {
+    console.log('Incident started', monitorId);
 
-const runProbe = async (monitor: Partial<Monitor>) => {
-  const { timeout, url, method } = monitor;
-  const start = Date.now();
-
-  try {
-    const response = await axios({
-      url,
-      method,
-      timeout,
-      validateStatus: () => true, // Dont throw on 4xx/5xx
+    return this.prisma.incident.create({
+      data: {
+        monitorId,
+        startedAt: new Date(),
+        status: 'OPEN',
+        triggerReason: reason ?? 'HEALTH_CHECK_FAILED',
+      },
     });
-
-    return normalizeProbeResult(null, response, start);
-  } catch (error) {
-    return normalizeProbeResult(error, null, start);
   }
-};
 
-const startIncident = async (monitorId: string, reason?: string) => {
-  console.log('Incident started', monitorId);
+  private async resolveIncident(monitorId: string) {
+    console.log('Incident resolved', monitorId);
 
-  return prisma.incident.create({
-    data: {
-      monitorId,
-      startedAt: new Date(),
-      status: 'OPEN',
-      triggerReason: reason ?? 'HEALTH_CHECK_FAILED',
-    },
-  });
-};
+    return this.prisma.incident.updateMany({
+      where: {
+        monitorId,
+        status: 'OPEN',
+      },
+      data: {
+        status: 'RESOLVED',
+        endedAt: new Date(),
+      },
+    });
+  }
 
-const resolveIncident = async (monitorId: string) => {
-  console.log('Incident resolved', monitorId);
-
-  return prisma.incident.updateMany({
-    where: {
-      monitorId,
-      status: 'OPEN',
-    },
-    data: {
-      status: 'RESOLVED',
-      endedAt: new Date(),
-    },
-  });
-};
-
-new Worker(
-  'monitor-check',
-  async (job) => {
+  private async processJob(job: any) {
     console.log('Running job', job.data);
 
     const { monitorId } = job.data;
 
-    const monitor = await prisma.monitor.findFirst({
+    const monitor = await this.prisma.monitor.findFirst({
       where: { id: monitorId },
       select: {
         id: true,
+        userId: true,
+        name: true,
         lastStatus: true,
         consecutiveFailures: true,
         consecutiveSuccesses: true,
@@ -113,7 +149,7 @@ new Worker(
 
     if (!monitor) throw new NotFoundException('Monitor not found');
 
-    const probeResult = await runProbe(monitor);
+    const probeResult = await this.runProbe(monitor);
 
     const isHealthy = probeResult.isHealthy;
 
@@ -163,7 +199,7 @@ new Worker(
     }
 
     await Promise.all([
-      prisma.monitor.update({
+      this.prisma.monitor.update({
         where: { id: monitorId },
         data: {
           lastStatus: nextStatus,
@@ -171,7 +207,7 @@ new Worker(
           consecutiveSuccesses: nextConsecutiveSuccesses,
         },
       }),
-      prisma.monitorLog.create({
+      this.prisma.monitorLog.create({
         data: {
           monitorId,
           status: isHealthy ? 'UP' : 'DOWN',
@@ -184,16 +220,61 @@ new Worker(
 
     //Incident start/resolve operation
     if (shouldStartIncident) {
-      await startIncident(monitorId, probeResult.reason);
+      const incident = await this.startIncident(monitorId, probeResult.reason);
+
+      await this.notificationService.emitNotification({
+        id: incident.id,
+        type: NotificationEventType.MONITOR_DOWN,
+        userId: monitor.userId,
+        monitorId: monitor.id,
+        incidentId: incident.id,
+        occurredAt: new Date(),
+        data: {
+          monitorName: monitor.name || monitor.url,
+          url: monitor.url,
+          currentStatus: 'DOWN',
+          previousStatus: monitor.lastStatus as 'UP' | 'DOWN',
+          responseTime: probeResult.responseMs,
+          errorMessage: probeResult.reason,
+        },
+      });
+
+      this.logger.log('Emitted start incident notification');
     }
 
     if (shouldResolveIncident) {
-      await resolveIncident(monitorId);
+      const resolvedIncidents = await this.resolveIncident(monitorId);
+      // Note: resolveIncident returns updateMany result, so you may need to fetch the incident
+      // For now, using monitorId as incidentId placeholder - you may need to adjust this
+      // const openIncidents = await this.prisma.incident.findMany({
+      //   where: {
+      //     monitorId,
+      //     status: 'OPEN',
+      //   },
+      //   orderBy: { startedAt: 'desc' },
+      //   take: 1,
+      // });
+
+      // if (openIncidents.length > 0) {
+      //   const resolvedIncident = openIncidents[0];
+      //   await this.notificationService.emitNotification({
+      //     id: resolvedIncident.id,
+      //     type: NotificationEventType.MONITOR_UP,
+      //     userId: monitor.userId,
+      //     monitorId: monitor.id,
+      //     incidentId: resolvedIncident.id,
+      //     occurredAt: new Date(),
+      //     data: {
+      //       monitorName: monitor.name || monitor.url,
+      //       url: monitor.url,
+      //       currentStatus: 'UP',
+      //       previousStatus: 'DOWN',
+      //       responseTime: probeResult.responseMs,
+      //     },
+      //   });
+      // }
     }
 
     console.log(`${monitor.url} ${nextStatus} (${probeResult.responseMs}ms)`);
-  },
-  {
-    connection: { host: 'localhost', port: 6379 },
-  },
-);
+  }
+}
